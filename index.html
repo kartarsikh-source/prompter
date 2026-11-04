@@ -103,6 +103,11 @@ textarea{flex:1;resize:none;line-height:1.5;min-height:0}
 .keys span.k{color:var(--mute);font-size:.85rem;text-align:right}
 .hint{color:var(--mute);font-size:.85rem;line-height:1.45;margin:6px 0}
 .micinfo{color:var(--ok);font-size:.85rem;margin:6px 0}
+.stp{display:grid;grid-template-columns:1fr auto;gap:8px 12px;align-items:center;padding:10px 0;border-bottom:1px solid var(--line)}
+.stp label{font-weight:600}
+.stp .ctl{display:flex;align-items:center;gap:4px}
+.stp .ctl button{min-width:48px;min-height:48px;padding:0;font-size:1.4rem;line-height:1;touch-action:manipulation}
+.stp output{min-width:5em;text-align:center;color:var(--amber);font-variant-numeric:tabular-nums}
 </style>
 </head>
 <body>
@@ -165,6 +170,7 @@ textarea{flex:1;resize:none;line-height:1.5;min-height:0}
     </div>
     <p class="hint">Each preset keeps its own text size, line spacing, side margin, reading line height, camera dimming, mirror, dimming of read words, speeds and sound levels. Whatever you change below is saved into the preset you have selected.</p>
     <div class="sw"><label for="sAuto">Switch preset automatically when I rotate the phone</label><input type="checkbox" id="sAuto"></div>
+    <div class="row" style="margin-top:12px"><button id="resetPreset">Reset this preset to defaults</button></div>
 
     <div class="sec">Microphone</div>
     <div class="set full"><label for="sMic">Mic input</label><select id="sMic"></select></div>
@@ -189,19 +195,19 @@ textarea{flex:1;resize:none;line-height:1.5;min-height:0}
         <option value="hi-IN">Hindi (India)</option>
       </select></div>
     <div class="sw"><label for="sHeard">Show what the app hears (for testing)</label><input type="checkbox" id="sHeard"></div>
-    <div class="set"><label for="sSpeed">Backup speed, practice</label><output id="oSpeed"></output><input type="range" id="sSpeed" min="5" max="120" step="1"></div>
-    <div class="set"><label for="sSpeedRec">Backup speed, recording</label><output id="oSpeedRec"></output><input type="range" id="sSpeedRec" min="5" max="120" step="1"></div>
-    <div class="set"><label for="sSens">Sound trigger level</label><output id="oSens"></output><input type="range" id="sSens" min="0" max="100" step="1"></div>
-    <div class="set"><label for="sHold">Pause after silence</label><output id="oHold"></output><input type="range" id="sHold" min="0.2" max="2.5" step="0.1"></div>
+    <div class="stp" data-step="speed"></div>
+    <div class="stp" data-step="speedRec"></div>
+    <div class="stp" data-step="sens"></div>
+    <div class="stp" data-step="hold"></div>
     <div class="set"><label for="sCountPractice">Countdown, practice</label><select id="sCountPractice"><option value="0">Off</option><option value="3">3 seconds</option><option value="5">5 seconds</option></select></div>
     <div class="set"><label for="sCount">Countdown, recording</label><select id="sCount"><option value="0">Off</option><option value="3">3 seconds</option><option value="5">5 seconds</option><option value="10">10 seconds</option></select></div>
 
     <div class="sec">Text and reading line</div>
-    <div class="set"><label for="sSize">Text size</label><output id="oSize"></output><input type="range" id="sSize" min="24" max="120" step="2"></div>
-    <div class="set"><label for="sLH">Line spacing</label><output id="oLH"></output><input type="range" id="sLH" min="1.1" max="2" step="0.05"></div>
-    <div class="set"><label for="sMar">Side margin</label><output id="oMar"></output><input type="range" id="sMar" min="0" max="30" step="1"></div>
-    <div class="set"><label for="sLinePos">Reading line height (lower = nearer the camera)</label><output id="oLinePos"></output><input type="range" id="sLinePos" min="8" max="70" step="1"></div>
-    <div class="set"><label for="sDim">Camera dimming</label><output id="oDim"></output><input type="range" id="sDim" min="0" max="95" step="5"></div>
+    <div class="stp" data-step="size"></div>
+    <div class="stp" data-step="lh"></div>
+    <div class="stp" data-step="margin"></div>
+    <div class="stp" data-step="linePos"></div>
+    <div class="stp" data-step="dim"></div>
     <div class="sw"><label for="sHi">Dim words I've already read</label><input type="checkbox" id="sHi"></div>
     <div class="sw"><label for="sMirror">Mirror text (beam-splitter glass)</label><input type="checkbox" id="sMirror"></div>
     <div class="sw"><label for="sLine">Show reading line</label><input type="checkbox" id="sLine"></div>
@@ -216,7 +222,7 @@ textarea{flex:1;resize:none;line-height:1.5;min-height:0}
     <p class="hint">Pair your clicker or keyboard in Android Bluetooth settings first. Tap a button below, then press the key you want.</p>
     <div class="keys" id="keys"></div>
     <div class="row" style="margin-top:12px"><button id="keysReset">Reset keys</button></div>
-    <p class="hint" style="margin-top:18px">Prompter version 3. Tap any word on screen to jump there.</p>
+    <p class="hint" style="margin-top:18px">Prompter version 4. Tap any word on screen to jump there.</p>
   </div></div>
 </section>
 <div id="toast" role="status"></div>
@@ -796,13 +802,43 @@ function releaseWake(){ try{ wake && wake.release(); }catch(e){} wake=null; }
 document.addEventListener('visibilitychange', ()=>{ if(document.visibilityState==='visible' && $('stage').classList.contains('on')){ lockScreen(); if(audioCtx && audioCtx.state==='suspended') audioCtx.resume(); } });
 
 /* ---------- settings sheet ---------- */
-const fmt = {
-  sSize:v=>v+' px', sLH:v=>(+v).toFixed(2), sMar:v=>v+'%', sDim:v=>v+'%', sLinePos:v=>v+'%',
-  sSpeed:v=>v+' /min', sSpeedRec:v=>v+' /min', sSens:v=>v, sHold:v=>(+v).toFixed(1)+' s'
+/* Number settings use - / + buttons, not sliders: a slider jumps to wherever a finger lands, which
+   changed values by accident while scrolling the settings panel. */
+const STEPS = {
+  size:    {label:'Text size', min:24, max:100, step:2, fmt:v=>v+' px', layout:true},
+  lh:      {label:'Line spacing', min:1.1, max:2, step:0.05, fmt:v=>(+v).toFixed(2), layout:true},
+  margin:  {label:'Side margin', min:0, max:30, step:1, fmt:v=>v+'%', layout:true},
+  linePos: {label:'Reading line height (lower = nearer the camera)', min:8, max:70, step:1, fmt:v=>v+'%', layout:true},
+  dim:     {label:'Camera dimming', min:0, max:95, step:5, fmt:v=>v+'%', layout:true},
+  speed:   {label:'Backup speed, practice', min:5, max:120, step:1, fmt:v=>v+' /min'},
+  speedRec:{label:'Backup speed, recording', min:5, max:120, step:1, fmt:v=>v+' /min'},
+  sens:    {label:'Sound trigger level', min:0, max:100, step:1, fmt:v=>String(v)},
+  hold:    {label:'Pause after silence', min:0.2, max:2.5, step:0.1, fmt:v=>(+v).toFixed(1)+' s'}
 };
-const rangeMap = { sSize:['size','oSize'], sLH:['lh','oLH'], sMar:['margin','oMar'], sDim:['dim','oDim'], sLinePos:['linePos','oLinePos'],
-  sSpeed:['speed','oSpeed'], sSpeedRec:['speedRec','oSpeedRec'], sSens:['sens','oSens'], sHold:['hold','oHold'] };
-const layoutIds = ['sSize','sLH','sMar','sDim','sLinePos'];
+function updateStep(k){ const o = document.getElementById('o_'+k); if(o) o.textContent = STEPS[k].fmt(S[k]); }
+function changeStep(k, dir){
+  const c = STEPS[k];
+  let v = Math.round((S[k] + dir*c.step) / c.step) * c.step;
+  v = Number(Math.min(c.max, Math.max(c.min, v)).toFixed(2));
+  if(v === S[k]) return;
+  S[k] = v; saveSettings(); updateStep(k);
+  if(c.layout){ applyLook(); setPos(targetFor(cursor)); }
+}
+function buildSteppers(){
+  document.querySelectorAll('.stp[data-step]').forEach(el=>{
+    const k = el.dataset.step, c = STEPS[k];
+    el.innerHTML = '<label>'+esc(c.label)+'</label><div class="ctl"><button type="button" data-d="-1" aria-label="Decrease">&minus;</button><output id="o_'+k+'"></output><button type="button" data-d="1" aria-label="Increase">+</button></div>';
+    el.querySelectorAll('button').forEach(btn=>{
+      const dir = parseInt(btn.dataset.d, 10); let t = 0, iv = 0, held = false;
+      const stop = ()=>{ clearTimeout(t); clearInterval(iv); };
+      // one tap = one step. Holding for half a second repeats. A scroll gesture cancels it, so scrolling never changes a value.
+      btn.addEventListener('pointerdown', ()=>{ held = false; stop(); t = setTimeout(()=>{ held = true; changeStep(k, dir); iv = setInterval(()=>changeStep(k, dir), 90); }, 450); });
+      ['pointerup','pointercancel','pointerleave'].forEach(ev=>btn.addEventListener(ev, stop));
+      btn.addEventListener('click', ()=>{ if(held){ held = false; return; } changeStep(k, dir); });
+    });
+  });
+}
+buildSteppers();
 const selMap = { sMode:['mode',false], sLang:['lang',false], sRes:['res',true], sFps:['fps',true], sCount:['count',true], sCountPractice:['countPractice',true] };
 const boxMap = { sMirror:'mirror', sLine:'line', sHi:'hi', sHeard:'heard', sCam:'cam', sAuto:'autoPreset' };
 function modeHint(){
@@ -812,16 +848,10 @@ function modeHint(){
     m==='sound' ? 'Scrolls while it hears you and pauses when you go quiet. Works offline.' : 'Scrolls at the backup speed the whole time.';
 }
 function syncSettings(){
-  for(const id in rangeMap){ const [k,o]=rangeMap[id]; $(id).value = S[k]; $(o).textContent = fmt[id](S[k]); }
+  for(const k in STEPS) updateStep(k);
   for(const id in selMap){ $(id).value = String(S[selMap[id][0]]); }
   for(const id in boxMap){ $(id).checked = !!S[boxMap[id]]; }
   modeHint(); updatePresetUI();
-}
-for(const id in rangeMap){
-  $(id).addEventListener('input', ()=>{
-    const [k,o] = rangeMap[id]; S[k] = parseFloat($(id).value); $(o).textContent = fmt[id](S[k]); saveSettings();
-    if(layoutIds.indexOf(id) >= 0){ applyLook(); setPos(targetFor(cursor)); }
-  });
 }
 for(const id in selMap){
   $(id).addEventListener('change', ()=>{
@@ -873,10 +903,17 @@ function pickPreset(name){
 }
 const mqPortrait = window.matchMedia ? matchMedia('(orientation: portrait)') : null;
 function autoSwitch(){
-  if(!S.autoPreset || !mqPortrait || recording) return;
+  if(!S.autoPreset || !mqPortrait || recording || $('sheet').classList.contains('on')) return;
   switchPreset(mqPortrait.matches ? 'vertical' : 'horizontal');
 }
 if(mqPortrait){ if(mqPortrait.addEventListener) mqPortrait.addEventListener('change', autoSwitch); else if(mqPortrait.addListener) mqPortrait.addListener(autoSwitch); }
+let rstArm = 0;
+$('resetPreset').onclick = ()=>{
+  const b = $('resetPreset');
+  if(!rstArm){ rstArm = 1; b.textContent = 'Tap again to reset this preset'; setTimeout(()=>{ rstArm = 0; b.textContent = 'Reset this preset to defaults'; }, 3000); return; }
+  rstArm = 0; b.textContent = 'Reset this preset to defaults';
+  Object.assign(S, pickPK(DEF)); saveSettings(); applyLook(); setPos(targetFor(cursor)); syncSettings(); toast('Preset reset to defaults', 1800);
+};
 $('presetBtn').onclick = ()=>pickPreset(S.preset === 'vertical' ? 'horizontal' : 'vertical');
 $('pVert').onclick = ()=>pickPreset('vertical');
 $('pHorz').onclick = ()=>pickPreset('horizontal');
