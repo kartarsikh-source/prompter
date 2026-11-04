@@ -67,6 +67,18 @@ textarea{flex:1;resize:none;line-height:1.5;min-height:0}
 #meter b{position:absolute;top:-2px;bottom:-2px;width:2px;background:var(--amber)}
 #status{font-size:.8rem;color:#fff;background:#0008;border-radius:20px;padding:4px 10px;white-space:nowrap;flex:none}
 #status.live{background:var(--ok);color:#06210f}
+#top{gap:6px}
+#top .sbtn{min-width:44px;min-height:44px;padding:8px 10px}
+#top #meter{width:40px}
+#top #status{font-size:.75rem;padding:4px 8px}
+#presetBtn{flex:1;min-width:0;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;font-size:.85rem}
+.ico{display:inline-block;border:2px solid currentColor;border-radius:3px;margin-right:8px;vertical-align:-2px}
+.ico.v{width:9px;height:15px}
+.ico.h{width:15px;height:9px}
+.seg{display:grid;grid-template-columns:1fr 1fr;gap:8px;margin:8px 0}
+.seg button{min-height:60px;text-align:center;line-height:1.25}
+.seg button.on{background:var(--amber);color:#1a1405;border-color:var(--amber);font-weight:700}
+.seg small{display:block;font-weight:400;opacity:.8;font-size:.75rem}
 #heard{position:absolute;left:0;right:0;bottom:calc(92px + env(safe-area-inset-bottom,0px));text-align:center;color:#fff;font-size:.8rem;opacity:.85;pointer-events:none;z-index:4;padding:0 16px;display:none;text-shadow:0 1px 2px #000}
 #count{position:absolute;inset:0;display:none;align-items:center;justify-content:center;font-size:30vmin;font-weight:800;color:#fff;background:#000a;z-index:9}
 #count.on{display:flex}
@@ -128,11 +140,11 @@ textarea{flex:1;resize:none;line-height:1.5;min-height:0}
   <div id="line"></div>
   <div id="top">
     <button class="sbtn" id="stBack" aria-label="Back">&larr;</button>
-    <div class="ttl" id="stTitle"></div>
+    <button class="sbtn" id="presetBtn" aria-label="Switch between vertical and horizontal preset"></button>
     <div id="meter" title="Mic level"><i></i><b></b></div>
     <span id="status">Paused</span>
     <button class="sbtn" id="fsBtn" aria-label="Fullscreen">&#x26F6;</button>
-    <button class="sbtn" id="setBtn" aria-label="Settings">Settings</button>
+    <button class="sbtn" id="setBtn" aria-label="Settings">&#9881;&#xFE0E;</button>
   </div>
   <div id="heard"></div>
   <div id="bot">
@@ -144,7 +156,15 @@ textarea{flex:1;resize:none;line-height:1.5;min-height:0}
   </div>
   <div id="count"></div>
   <div id="sheet"><div id="panel">
-    <div class="row"><h1 class="grow" style="font-size:1.2rem">Settings</h1><button id="closeSheet">Done</button></div>
+    <div class="row"><h1 class="grow" style="font-size:1.2rem" id="setTitle">Settings</h1><button id="closeSheet">Done</button></div>
+
+    <div class="sec">Format preset</div>
+    <div class="seg">
+      <button id="pVert"><i class="ico v"></i>Vertical<small>phone upright</small></button>
+      <button id="pHorz"><i class="ico h"></i>Horizontal<small>phone sideways</small></button>
+    </div>
+    <p class="hint">Each preset keeps its own text size, line spacing, side margin, reading line height, camera dimming, mirror, dimming of read words, speeds and sound levels. Whatever you change below is saved into the preset you have selected.</p>
+    <div class="sw"><label for="sAuto">Switch preset automatically when I rotate the phone</label><input type="checkbox" id="sAuto"></div>
 
     <div class="sec">Microphone</div>
     <div class="set full"><label for="sMic">Mic input</label><select id="sMic"></select></div>
@@ -196,7 +216,7 @@ textarea{flex:1;resize:none;line-height:1.5;min-height:0}
     <p class="hint">Pair your clicker or keyboard in Android Bluetooth settings first. Tap a button below, then press the key you want.</p>
     <div class="keys" id="keys"></div>
     <div class="row" style="margin-top:12px"><button id="keysReset">Reset keys</button></div>
-    <p class="hint" style="margin-top:18px">Prompter version 2. Tap any word on screen to jump there.</p>
+    <p class="hint" style="margin-top:18px">Prompter version 3. Tap any word on screen to jump there.</p>
   </div></div>
 </section>
 <div id="toast" role="status"></div>
@@ -221,9 +241,20 @@ const DEFAULT_KEYS = {
 const ACTIONS = [['toggle','Play / pause'],['faster','Faster'],['slower','Slower'],['back','Nudge back'],['forward','Nudge forward']];
 const DEF = { size:56, lh:1.4, margin:6, dim:55, mirror:false, line:true, linePos:40, hi:true,
   mode:'words', lang:'en-CA', heard:true, speed:30, speedRec:30, sens:55, hold:0.8,
-  count:3, countPractice:0, cam:true, mic:'', res:1080, fps:30 };
+  count:3, countPractice:0, cam:true, mic:'', res:1080, fps:30, preset:'', autoPreset:false };
 let S = Object.assign({}, DEF, store.get('tp.settings', {}));
 if(['words','sound','fixed'].indexOf(S.mode) < 0) S.mode = 'words';
+
+/* Format presets: these settings are stored separately for Vertical and Horizontal */
+const PK = ['size','lh','margin','linePos','dim','hi','mirror','line','speed','speedRec','sens','hold'];
+const pickPK = o => { const r = {}; PK.forEach(k => { r[k] = o[k]; }); return r; };
+let P = store.get('tp.presets', null);
+if(!P || !P.vertical || !P.horizontal){
+  P = { vertical:pickPK(S), horizontal:pickPK(S) };      // first run: both start as a copy of your current settings
+  S.preset = (window.matchMedia && matchMedia('(orientation: landscape)').matches) ? 'horizontal' : 'vertical';
+}
+if(S.preset !== 'vertical' && S.preset !== 'horizontal') S.preset = 'vertical';
+Object.assign(S, pickPK(DEF), P[S.preset]);
 let KEYS = Object.assign({}, DEFAULT_KEYS, store.get('tp.keys', {}));
 let scripts = store.get('tp.scripts', null);
 if(!scripts){
@@ -241,7 +272,7 @@ let recorder = null, chunks = [], recording = false, recMime = '', recStart = 0,
 let wake = null, raf = 0, lastT = 0, hideTimer = 0, learning = null, drag = null;
 let lastResult = 0, lastSync = 0, inFallback = false, statusKey = '';
 
-const saveSettings = () => store.set('tp.settings', S);
+function saveSettings(){ P[S.preset] = pickPK(S); store.set('tp.presets', P); store.set('tp.settings', S); }
 const saveScripts = () => store.set('tp.scripts', scripts);
 function toast(msg, ms){ const t=$('toast'); t.textContent=msg; t.style.display='block'; clearTimeout(toast.h); toast.h=setTimeout(()=>t.style.display='none', ms||2400); }
 function show(id){ document.querySelectorAll('.view').forEach(v=>v.classList.toggle('on', v.id===id)); }
@@ -388,8 +419,8 @@ function setCursor(i, snap){
 }
 
 function openStage(s){
-  cur = s; $('stTitle').textContent = s.title||'Untitled';
-  show('stage'); buildText(s.body); pos = 0; armed = false; vel = 0; speaking = false; counting = false;
+  cur = s;
+  show('stage'); buildText(s.body); autoSwitch(); pos = 0; armed = false; vel = 0; speaking = false; counting = false;
   applyLook(); setPos(0); setPlayUI(); showControls(true);
   startMedia(); lockScreen(); startSilentAudio(); loop();
 }
@@ -773,7 +804,7 @@ const rangeMap = { sSize:['size','oSize'], sLH:['lh','oLH'], sMar:['margin','oMa
   sSpeed:['speed','oSpeed'], sSpeedRec:['speedRec','oSpeedRec'], sSens:['sens','oSens'], sHold:['hold','oHold'] };
 const layoutIds = ['sSize','sLH','sMar','sDim','sLinePos'];
 const selMap = { sMode:['mode',false], sLang:['lang',false], sRes:['res',true], sFps:['fps',true], sCount:['count',true], sCountPractice:['countPractice',true] };
-const boxMap = { sMirror:'mirror', sLine:'line', sHi:'hi', sHeard:'heard', sCam:'cam' };
+const boxMap = { sMirror:'mirror', sLine:'line', sHi:'hi', sHeard:'heard', sCam:'cam', sAuto:'autoPreset' };
 function modeHint(){
   const m = S.mode;
   $('modeHint').textContent = !SR && m==='words' ? 'This browser has no speech recognition, so it will use sound only.' :
@@ -784,7 +815,7 @@ function syncSettings(){
   for(const id in rangeMap){ const [k,o]=rangeMap[id]; $(id).value = S[k]; $(o).textContent = fmt[id](S[k]); }
   for(const id in selMap){ $(id).value = String(S[selMap[id][0]]); }
   for(const id in boxMap){ $(id).checked = !!S[boxMap[id]]; }
-  modeHint();
+  modeHint(); updatePresetUI();
 }
 for(const id in rangeMap){
   $(id).addEventListener('input', ()=>{
@@ -808,6 +839,7 @@ for(const id in boxMap){
     S[boxMap[id]] = $(id).checked; saveSettings(); applyLook();
     if(id==='sCam') startMedia();
     if(id==='sHeard') statusKey = '';
+    if(id==='sAuto') autoSwitch();
   });
 }
 $('sMic').addEventListener('change', ()=>{
@@ -817,6 +849,37 @@ $('sMic').addEventListener('change', ()=>{
 $('setBtn').onclick = ()=>{ syncSettings(); renderKeys(); populateMics(); $('sheet').classList.add('on'); showControls(true); };
 $('closeSheet').onclick = ()=>{ learning=null; $('sheet').classList.remove('on'); };
 $('sheet').addEventListener('pointerdown', e=>{ if(e.target===$('sheet')){ learning=null; $('sheet').classList.remove('on'); } });
+
+/* ---------- vertical / horizontal presets ---------- */
+function updatePresetUI(){
+  const v = S.preset === 'vertical';
+  $('presetBtn').innerHTML = '<i class="ico ' + (v ? 'v' : 'h') + '"></i>' + (v ? 'Vertical' : 'Horizontal');
+  $('pVert').classList.toggle('on', v); $('pHorz').classList.toggle('on', !v);
+  $('setTitle').textContent = 'Settings: ' + (v ? 'Vertical' : 'Horizontal');
+}
+function switchPreset(name, quiet){
+  if(name !== 'vertical' && name !== 'horizontal') return;
+  if(name === S.preset) return;
+  saveSettings();                                   // store the preset we are leaving
+  S.preset = name; Object.assign(S, pickPK(DEF), P[name]);
+  saveSettings();
+  if($('stage').classList.contains('on')){ applyLook(); setPos(targetFor(cursor)); }
+  syncSettings();
+  if(!quiet) toast((name === 'vertical' ? 'Vertical' : 'Horizontal') + ' preset loaded', 1600);
+}
+function pickPreset(name){
+  if(recording){ toast('Stop recording before switching presets', 2500); return; }
+  switchPreset(name);
+}
+const mqPortrait = window.matchMedia ? matchMedia('(orientation: portrait)') : null;
+function autoSwitch(){
+  if(!S.autoPreset || !mqPortrait || recording) return;
+  switchPreset(mqPortrait.matches ? 'vertical' : 'horizontal');
+}
+if(mqPortrait){ if(mqPortrait.addEventListener) mqPortrait.addEventListener('change', autoSwitch); else if(mqPortrait.addListener) mqPortrait.addListener(autoSwitch); }
+$('presetBtn').onclick = ()=>pickPreset(S.preset === 'vertical' ? 'horizontal' : 'vertical');
+$('pVert').onclick = ()=>pickPreset('vertical');
+$('pHorz').onclick = ()=>pickPreset('horizontal');
 
 /* ---------- boot ---------- */
 renderList(); syncSettings();
