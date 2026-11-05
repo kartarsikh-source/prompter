@@ -79,7 +79,7 @@ textarea{flex:1;resize:none;line-height:1.5;min-height:0}
 .seg button{min-height:60px;text-align:center;line-height:1.25}
 .seg button.on{background:var(--amber);color:#1a1405;border-color:var(--amber);font-weight:700}
 .seg small{display:block;font-weight:400;opacity:.8;font-size:.75rem}
-#heard{position:absolute;left:0;right:0;bottom:calc(92px + env(safe-area-inset-bottom,0px));text-align:center;color:#fff;font-size:.8rem;opacity:.85;pointer-events:none;z-index:4;padding:0 16px;display:none;text-shadow:0 1px 2px #000}
+#heard{position:absolute;left:0;right:0;bottom:calc(92px + env(safe-area-inset-bottom,0px));text-align:center;color:#fff;font-size:.8rem;opacity:.85;pointer-events:none;z-index:4;padding:0 16px;display:none;text-shadow:0 1px 2px #000;white-space:pre-line}
 #count{position:absolute;inset:0;display:none;align-items:center;justify-content:center;font-size:30vmin;font-weight:800;color:#fff;background:#000a;z-index:9}
 #count.on{display:flex}
 #toast{position:fixed;left:50%;bottom:90px;transform:translateX(-50%);background:#000c;color:#fff;border:1px solid #fff3;padding:10px 16px;border-radius:20px;z-index:30;display:none;max-width:90vw;text-align:center}
@@ -194,11 +194,13 @@ textarea{flex:1;resize:none;line-height:1.5;min-height:0}
         <option value="pa-IN">Punjabi (India)</option>
         <option value="hi-IN">Hindi (India)</option>
       </select></div>
+    <div class="sw"><label for="sRecWords">Use Chrome speech while recording (it beeps, and the beeps can end up in your video)</label><input type="checkbox" id="sRecWords"></div>
     <div class="sw"><label for="sHeard">Show what the app hears (for testing)</label><input type="checkbox" id="sHeard"></div>
     <div class="stp" data-step="speed"></div>
     <div class="stp" data-step="speedRec"></div>
     <div class="stp" data-step="sens"></div>
     <div class="stp" data-step="hold"></div>
+    <div class="stp" data-step="nudge"></div>
     <div class="set"><label for="sCountPractice">Countdown, practice</label><select id="sCountPractice"><option value="0">Off</option><option value="3">3 seconds</option><option value="5">5 seconds</option></select></div>
     <div class="set"><label for="sCount">Countdown, recording</label><select id="sCount"><option value="0">Off</option><option value="3">3 seconds</option><option value="5">5 seconds</option><option value="10">10 seconds</option></select></div>
 
@@ -222,7 +224,7 @@ textarea{flex:1;resize:none;line-height:1.5;min-height:0}
     <p class="hint">Pair your clicker or keyboard in Android Bluetooth settings first. Tap a button below, then press the key you want.</p>
     <div class="keys" id="keys"></div>
     <div class="row" style="margin-top:12px"><button id="keysReset">Reset keys</button></div>
-    <p class="hint" style="margin-top:18px">Prompter version 4. Tap any word on screen to jump there.</p>
+    <p class="hint" style="margin-top:18px">Prompter version 6. Tap any word on screen to jump there.</p>
   </div></div>
 </section>
 <div id="toast" role="status"></div>
@@ -247,12 +249,12 @@ const DEFAULT_KEYS = {
 const ACTIONS = [['toggle','Play / pause'],['faster','Faster'],['slower','Slower'],['back','Nudge back'],['forward','Nudge forward']];
 const DEF = { size:56, lh:1.4, margin:6, dim:55, mirror:false, line:true, linePos:40, hi:true,
   mode:'words', lang:'en-CA', heard:true, speed:30, speedRec:30, sens:55, hold:0.8,
-  count:3, countPractice:0, cam:true, mic:'', res:1080, fps:30, preset:'', autoPreset:false };
+  count:3, countPractice:0, cam:true, mic:'', res:1080, fps:30, preset:'', autoPreset:false, recWords:false, nudge:2 };
 let S = Object.assign({}, DEF, store.get('tp.settings', {}));
 if(['words','sound','fixed'].indexOf(S.mode) < 0) S.mode = 'words';
 
 /* Format presets: these settings are stored separately for Vertical and Horizontal */
-const PK = ['size','lh','margin','linePos','dim','hi','mirror','line','speed','speedRec','sens','hold'];
+const PK = ['size','lh','margin','linePos','dim','hi','mirror','line','speed','speedRec','sens','hold','nudge'];
 const pickPK = o => { const r = {}; PK.forEach(k => { r[k] = o[k]; }); return r; };
 let P = store.get('tp.presets', null);
 if(!P || !P.vertical || !P.horizontal){
@@ -276,7 +278,7 @@ let toks = [], cursor = 0, hl = 0, misses = 0, recent = [];
 let stream = null, audioCtx = null, analyser = null, buf = null, mediaGen = 0, mediaStamp = 0;
 let recorder = null, chunks = [], recording = false, recMime = '', recStart = 0, recTimer = 0;
 let wake = null, raf = 0, lastT = 0, hideTimer = 0, learning = null, drag = null;
-let lastResult = 0, lastSync = 0, inFallback = false, statusKey = '';
+let lastResult = 0, lastSync = 0, inFallback = false, statusKey = '', glideTo = null;
 
 function saveSettings(){ P[S.preset] = pickPK(S); store.set('tp.presets', P); store.set('tp.settings', S); }
 const saveScripts = () => store.set('tp.scripts', scripts);
@@ -406,9 +408,10 @@ function targetFor(i){
   if(i >= toks.length) return maxPos();
   return Math.min(maxPos(), Math.max(0, toks[i].anchor.offsetTop - lineY()));
 }
-function cursorFromPos(){
+function cursorFromPos(p){
   if(!toks.length) return 0;
-  const y = pos + lineY() - S.size*S.lh*0.5;
+  if(p === undefined) p = pos;
+  const y = p + lineY() - S.size*S.lh*0.5;
   let lo = 0, hi = toks.length;
   while(lo < hi){ const mid = (lo+hi)>>1; if(toks[mid].el.offsetTop >= y) hi = mid; else lo = mid+1; }
   return lo;
@@ -421,12 +424,12 @@ function paint(){
 }
 function setCursor(i, snap){
   cursor = Math.min(Math.max(0,i), toks.length); paint(); recent = []; misses = 0;
-  if(snap){ setPos(targetFor(cursor)); vel = 0; }
+  if(snap){ glideTo = null; setPos(targetFor(cursor)); vel = 0; }
 }
 
 function openStage(s){
   cur = s;
-  show('stage'); buildText(s.body); autoSwitch(); pos = 0; armed = false; vel = 0; speaking = false; counting = false;
+  show('stage'); buildText(s.body); autoSwitch(); glideTo = null; pos = 0; armed = false; vel = 0; speaking = false; counting = false;
   applyLook(); setPos(0); setPlayUI(); showControls(true);
   startMedia(); lockScreen(); startSilentAudio(); loop();
 }
@@ -517,6 +520,12 @@ function readLevel(now){
 
 /* ---------- speech following (Chrome SpeechRecognition) ---------- */
 let recog = null, recogWanted = false, restarts = [], lastIdx = -1, consumedTail = 0, prevTail = [];
+let emptySessions = 0, soundSeen = false, evlog = [], lastHeardText = '';
+function logEv(s){ evlog.push(s); if(evlog.length > 6) evlog.shift(); refreshHeard(); }
+function refreshHeard(){
+  if(!S.heard) return;
+  $('heard').textContent = (lastHeardText ? 'Heard: '+lastHeardText+'  ('+Math.min(cursor,toks.length)+'/'+toks.length+')\n' : '') + 'Speech: ' + (evlog.join(' › ') || 'waiting');
+}
 function hear(raw){
   const w = nw(raw); if(!w || cursor >= toks.length) return;
   recent.push(w); if(recent.length > 4) recent.shift();
@@ -545,8 +554,9 @@ function startRecog(){
   const r = new SR(); recog = r;
   r.lang = S.lang; r.continuous = true; r.interimResults = true; r.maxAlternatives = 1;
   lastIdx = -1; consumedTail = 0; prevTail = [];
+  let gotResult = false; soundSeen = false; logEv('starting');
   r.onresult = ev=>{
-    lastResult = performance.now();
+    lastResult = performance.now(); gotResult = true; emptySessions = 0;
     const idx = ev.results.length - 1; if(idx < 0) return;
     const tail = (ev.results[idx][0].transcript||'').trim().split(/\s+/).filter(Boolean);
     if(idx !== lastIdx){
@@ -556,10 +566,10 @@ function startRecog(){
     if(tail.length < consumedTail) consumedTail = tail.length;
     for(let k=consumedTail; k<tail.length; k++) hear(tail[k]);
     consumedTail = tail.length; prevTail = tail;
-    if(S.heard) $('heard').textContent = 'Heard: '+tail.slice(-8).join(' ')+'   ('+Math.min(cursor,toks.length)+'/'+toks.length+')';
+    lastHeardText = tail.slice(-8).join(' '); refreshHeard();
   };
   r.onerror = ev=>{
-    const e = ev.error; let msg = '';
+    const e = ev.error; let msg = ''; logEv('error: '+e);
     if(e==='no-speech' || e==='aborted') return;
     if(e==='not-allowed' || e==='service-not-allowed') msg = 'Speech recognition is blocked. Allow the microphone for this site.';
     else if(e==='network') msg = 'Word-following needs internet. Using sound only.';
@@ -569,11 +579,21 @@ function startRecog(){
   };
   r.onend = ()=>{
     if(recog === r) recog = null;
+    logEv('ended');
     if(!(recogWanted && armed && effMode()==='words')) return;
+    // Chrome heard sound from the mic but returned no words in this session: count it, and stop after two (each restart beeps)
+    if(!gotResult && soundSeen) emptySessions++;
+    if(emptySessions >= 2){
+      recogWanted = false;
+      toast('Chrome speech is not hearing words on this phone, so this take uses sound-only scrolling.', 7000);
+      return;
+    }
     const now = performance.now(); restarts = restarts.filter(t=>now-t<10000); restarts.push(now);
     if(restarts.length > 10){ recogWanted = false; toast('Speech keeps stopping. Using sound only.', 4500); return; }
     setTimeout(()=>{ if(recogWanted && armed && !recog) startRecog(); }, 200);
   };
+  r.onstart = ()=>logEv('start'); r.onaudiostart = ()=>logEv('mic on'); r.onsoundstart = ()=>logEv('sound');
+  r.onspeechstart = ()=>logEv('speech'); r.onspeechend = ()=>logEv('speech end');
   try{ r.start(); }catch(e){ recog = null; recogWanted = false; }
 }
 function stopRecog(){
@@ -592,13 +612,14 @@ function loop(){
     if(mode === 'words'){
       if(!(drag && drag.moved)){
         const live = armed && !counting;
+        if(live && speaking) soundSeen = true;
         if(live && analyser && speaking && (!recogWanted || now-lastResult > 5000)){
           inFallback = true;
           vel += (pxPerSec()-vel) * Math.min(1, 10*dt); setPos(pos + vel*dt);
           if(now-lastSync > 150){ lastSync = now; const c = cursorFromPos(); if(c > cursor){ cursor = c; paint(); } }
         } else {
           vel = 0; const d = targetFor(cursor) - pos;
-          if(Math.abs(d) > 0.3) setPos(pos + d*Math.min(1, 6*dt));
+          if(Math.abs(d) > 0.3) setPos(pos + d*Math.min(1, 4.5*dt));
         }
       }
       if(armed && toks.length && cursor >= toks.length) endOfScript();
@@ -609,6 +630,10 @@ function loop(){
       vel += (target - vel) * Math.min(1, k*dt);
       if(Math.abs(vel) < 0.5 && target === 0) vel = 0;
       if(vel && !(drag && drag.moved)) setPos(pos + vel*dt);
+      if(glideTo !== null && !(drag && drag.moved)){
+        const gd = glideTo - pos;
+        if(Math.abs(gd) < 0.5){ setPos(glideTo); glideTo = null; } else setPos(pos + gd*Math.min(1, 5*dt));
+      }
       if(now-lastSync > 150){ lastSync = now; const c = cursorFromPos(); if(c !== cursor){ cursor = c; paint(); } }
       if(armed && maxPos() > 0 && pos >= maxPos()-1) endOfScript();
     }
@@ -632,7 +657,7 @@ function setStatus(){
     } else if(mode === 'sound'){ txt = analyser ? (speaking ? 'Speaking' : 'Waiting') : 'Scrolling'; cls = speaking ? 'live' : ''; }
     else { txt = 'Scrolling'; cls = 'live'; }
   }
-  const showHeard = S.heard && armed && effMode()==='words';
+  const showHeard = S.heard && armed && effMode()==='words' && !(recording && !S.recWords);
   const key = txt+'|'+cls+'|'+showHeard;
   if(key === statusKey) return; statusKey = key;
   const s = $('status'); s.textContent = txt; s.className = cls;
@@ -652,7 +677,9 @@ function beginRun(rec){
   countdown(rec ? S.count : S.countPractice, ()=>{
     if(rec) startRecording();
     armed = true; lastResult = performance.now(); restarts = []; recent = []; misses = 0;
-    if(effMode()==='words') startRecog();
+    emptySessions = 0; evlog = []; lastHeardText = '';
+    // Chrome speech beeps whenever it starts listening, so it is not used while recording unless you turn that on
+    if(effMode()==='words' && (!rec || S.recWords)) startRecog();
     setPlayUI(); showControls(false);
   });
 }
@@ -667,8 +694,16 @@ function bumpSpeed(d){
   toast((effMode()==='words' ? 'Backup speed ' : 'Speed ')+S[k]+' lines/min', 1200); syncSettings();
 }
 function nudge(dir){
-  setPos(pos + dir * $('view').clientHeight*0.25); vel = 0;
-  cursor = cursorFromPos(); paint(); recent = []; misses = 0;
+  // Glide a few lines instead of jumping: set a target and let the loop ease toward it.
+  // The target may lead the text by at most 3 presses, so a held or rapid-fire key stays smooth.
+  const step = S.nudge * S.size * S.lh;
+  const base = (glideTo !== null) ? glideTo : (effMode() === 'words' ? targetFor(cursor) : pos);
+  let t = base + dir*step;
+  t = Math.max(pos - 3*step, Math.min(pos + 3*step, t));
+  t = Math.max(0, Math.min(maxPos(), t));
+  vel = 0; recent = []; misses = 0;
+  if(effMode() === 'words'){ glideTo = null; cursor = cursorFromPos(t); paint(); }   // the loop eases to the new word
+  else glideTo = t;
 }
 const act = { toggle, faster:()=>bumpSpeed(5), slower:()=>bumpSpeed(-5), back:()=>nudge(-1), forward:()=>nudge(1) };
 $('play').onclick = toggle;
@@ -680,7 +715,7 @@ function showControls(stay){
   $('stage').classList.remove('hide'); clearTimeout(hideTimer);
   if(!stay && armed) hideTimer = setTimeout(()=>$('stage').classList.add('hide'), 3000);
 }
-$('view').addEventListener('pointerdown', e=>{ drag = {y:e.clientY, p:pos, moved:false}; try{ $('view').setPointerCapture(e.pointerId); }catch(_){} });
+$('view').addEventListener('pointerdown', e=>{ glideTo = null; drag = {y:e.clientY, p:pos, moved:false}; try{ $('view').setPointerCapture(e.pointerId); }catch(_){} });
 $('view').addEventListener('pointermove', e=>{ if(!drag) return; const dy = drag.y - e.clientY; if(Math.abs(dy)>6) drag.moved = true; if(drag.moved){ setPos(drag.p + dy); vel = 0; } });
 $('view').addEventListener('pointerup', e=>{
   if(!drag) return;
@@ -746,7 +781,7 @@ function finishRecording(){
 $('rec').onclick = ()=>{
   if(recording){ stopRecording(); armed = false; stopRecog(); setPlayUI(); showControls(true); return; }
   if(counting) return;
-  if(armed){ startRecording(); showControls(false); return; }   // already playing: start recording at once
+  if(armed){ if(startRecording() && !S.recWords) stopRecog(); showControls(false); return; }   // already playing: start recording at once
   beginRun(true);
 };
 
@@ -760,7 +795,7 @@ document.addEventListener('keydown', e=>{
     KEYS[learning] = list; store.set('tp.keys', KEYS); learning=null; renderKeys(); return;
   }
   if(!$('stage').classList.contains('on') || $('sheet').classList.contains('on')) return;
-  for(const [a] of ACTIONS){ if(KEYS[a].includes(e.key)){ e.preventDefault(); if(!e.repeat || a!=='toggle') act[a](); showControls(false); return; } }
+  for(const [a] of ACTIONS){ if(KEYS[a].includes(e.key)){ e.preventDefault(); if(!e.repeat || a==='faster' || a==='slower') act[a](); showControls(false); return; } }   // holding a key nudges once, not 30 times a second
 });
 function renderKeys(){
   $('keys').innerHTML = ACTIONS.map(([a,label])=>
@@ -813,7 +848,8 @@ const STEPS = {
   speed:   {label:'Backup speed, practice', min:5, max:120, step:1, fmt:v=>v+' /min'},
   speedRec:{label:'Backup speed, recording', min:5, max:120, step:1, fmt:v=>v+' /min'},
   sens:    {label:'Sound trigger level', min:0, max:100, step:1, fmt:v=>String(v)},
-  hold:    {label:'Pause after silence', min:0.2, max:2.5, step:0.1, fmt:v=>(+v).toFixed(1)+' s'}
+  hold:    {label:'Pause after silence', min:0.2, max:2.5, step:0.1, fmt:v=>(+v).toFixed(1)+' s'},
+  nudge:   {label:'Clicker nudge: lines per press', min:1, max:6, step:1, fmt:v=>v+(v===1?' line':' lines')}
 };
 function updateStep(k){ const o = document.getElementById('o_'+k); if(o) o.textContent = STEPS[k].fmt(S[k]); }
 function changeStep(k, dir){
@@ -840,11 +876,11 @@ function buildSteppers(){
 }
 buildSteppers();
 const selMap = { sMode:['mode',false], sLang:['lang',false], sRes:['res',true], sFps:['fps',true], sCount:['count',true], sCountPractice:['countPractice',true] };
-const boxMap = { sMirror:'mirror', sLine:'line', sHi:'hi', sHeard:'heard', sCam:'cam', sAuto:'autoPreset' };
+const boxMap = { sMirror:'mirror', sLine:'line', sHi:'hi', sHeard:'heard', sCam:'cam', sAuto:'autoPreset', sRecWords:'recWords' };
 function modeHint(){
   const m = S.mode;
   $('modeHint').textContent = !SR && m==='words' ? 'This browser has no speech recognition, so it will use sound only.' :
-    m==='words' ? 'Moves to where you are in the script as you speak. Needs internet. If it cannot hear words for 5 seconds while you are talking, it falls back to sound-based scrolling.' :
+    m==='words' ? 'Moves to where you are in the script as you speak. Needs internet. Chrome beeps each time it starts listening, so while you record it uses sound-based scrolling instead (unless you tick the option below). If Chrome cannot hear words, it also falls back to sound-based scrolling.' :
     m==='sound' ? 'Scrolls while it hears you and pauses when you go quiet. Works offline.' : 'Scrolls at the backup speed the whole time.';
 }
 function syncSettings(){
@@ -858,8 +894,9 @@ for(const id in selMap){
     const [k,num] = selMap[id];
     if((id==='sRes' || id==='sFps') && recording){ toast('Stop recording before changing video quality'); syncSettings(); return; }
     S[k] = num ? parseInt($(id).value,10) : $(id).value; saveSettings();
-    if(id==='sMode'){ modeHint(); stopRecog(); if(armed && effMode()==='words'){ lastResult = performance.now(); restarts = []; startRecog(); } }
-    if(id==='sLang' && armed && effMode()==='words'){ stopRecog(); startRecog(); }
+    const speechOk = armed && effMode()==='words' && !(recording && !S.recWords);
+    if(id==='sMode'){ modeHint(); stopRecog(); if(speechOk){ lastResult = performance.now(); restarts = []; emptySessions = 0; startRecog(); } }
+    if(id==='sLang' && speechOk){ stopRecog(); startRecog(); }
     if(id==='sRes' || id==='sFps') startMedia();
   });
 }
