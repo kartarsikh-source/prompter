@@ -230,7 +230,7 @@ textarea{flex:1;resize:none;line-height:1.5;min-height:0}
     <p class="hint">Pair your clicker or keyboard in Android Bluetooth settings first. Tap a button below, then press the key you want.</p>
     <div class="keys" id="keys"></div>
     <div class="row" style="margin-top:12px"><button id="keysReset">Reset keys</button></div>
-    <p class="hint" style="margin-top:18px">Prompter version 7. Tap any word on screen to jump there.</p>
+    <p class="hint" style="margin-top:18px">Prompter version 8. Tap any word on screen to jump there.</p>
   </div></div>
 </section>
 <div id="toast" role="status"></div>
@@ -432,7 +432,7 @@ function paint(){
   hl = cursor;
 }
 function setCursor(i, snap){
-  cursor = Math.min(Math.max(0,i), toks.length); paint(); recent = []; misses = 0;
+  cursor = Math.min(Math.max(0,i), toks.length); paint(); recent = []; misses = 0; paceBuf = [];
   if(snap){ glideTo = null; setPos(targetFor(cursor)); vel = 0; }
 }
 
@@ -605,7 +605,7 @@ function devText(text, final){
   if(final) DEV.consumed = 0;
   refreshHeard();
 }
-const FEED_CODE = "class F extends AudioWorkletProcessor{constructor(){super();this.b=new Float32Array(2048);this.n=0;}process(i){const c=i[0]&&i[0][0];if(c){for(let k=0;k<c.length;k++){this.b[this.n++]=c[k];if(this.n===2048){this.port.postMessage(this.b.slice(0));this.n=0;}}}return true;}}registerProcessor('feed',F);";
+const FEED_CODE = "class F extends AudioWorkletProcessor{constructor(){super();this.b=new Float32Array(1024);this.n=0;}process(i){const c=i[0]&&i[0][0];if(c){for(let k=0;k<c.length;k++){this.b[this.n++]=c[k];if(this.n===1024){this.port.postMessage(this.b.slice(0));this.n=0;}}}return true;}}registerProcessor('feed',F);";
 async function startDevice(){
   recogWanted = true; const my = ++DEV.gen;
   logEv('starting');
@@ -664,6 +664,21 @@ function refreshHeard(){
   if(!S.heard) return;
   $('heard').textContent = (lastHeardText ? 'Heard: '+lastHeardText+'  ('+Math.min(cursor,toks.length)+'/'+toks.length+')\n' : '') + 'Speech: ' + (evlog.join(' › ') || 'waiting');
 }
+/* Speech engines report a word a little after you say it. To hide that delay the text is aimed a few words ahead of
+   the last heard word, based on how fast you have been speaking, and it never creeps backwards by itself. */
+let paceBuf = [], lastAdv = 0, lastCurSeen = 0, noLead = 0;
+function paceNote(){ const t = performance.now(); lastAdv = t; paceBuf.push({t:t, c:cursor}); while(paceBuf.length && t - paceBuf[0].t > 5000) paceBuf.shift(); }
+function pace(){
+  if(paceBuf.length < 3) return 2.4;
+  const a = paceBuf[0], b = paceBuf[paceBuf.length-1], span = (b.t-a.t)/1000;
+  if(span < 1.2) return 2.4;
+  return Math.min(4.5, Math.max(1.2, (b.c-a.c)/span));
+}
+function targetAt(f){
+  const i = Math.floor(f), fr = f - i, a = targetFor(i);
+  if(fr < 0.01 || i+1 >= toks.length) return a;
+  return a + (targetFor(i+1)-a)*fr;
+}
 function hear(raw){
   const w = nw(raw); if(!w || cursor >= toks.length) return;
   recent.push(w); if(recent.length > 4) recent.shift();
@@ -674,7 +689,7 @@ function hear(raw){
     if(j-cursor > 2 && w.length <= 3) continue;
     found = j; break;
   }
-  if(found >= 0){ cursor = found+1; misses = 0; paint(); return; }
+  if(found >= 0){ cursor = found+1; misses = 0; paint(); paceNote(); return; }
   misses++;
   if(misses >= 2 && recent.length >= 2) resync();
 }
@@ -683,7 +698,7 @@ function resync(){
   if(a.length<=3 && b.length<=3) return;
   const end = Math.min(toks.length, cursor+80);
   for(let j=cursor+1; j<end; j++){
-    if(eq(a, toks[j].n) && eq(b, toks[j-1].n)){ cursor = j+1; misses = 0; paint(); return; }
+    if(eq(a, toks[j].n) && eq(b, toks[j-1].n)){ cursor = j+1; misses = 0; paint(); paceNote(); return; }
   }
 }
 function startRecog(){
@@ -757,8 +772,21 @@ function loop(){
           vel += (pxPerSec()-vel) * Math.min(1, 10*dt); setPos(pos + vel*dt);
           if(now-lastSync > 150){ lastSync = now; const c = cursorFromPos(); if(c > cursor){ cursor = c; paint(); } }
         } else {
-          vel = 0; const d = targetFor(cursor) - pos;
-          if(Math.abs(d) > 0.3) setPos(pos + d*Math.min(1, 4.5*dt));
+          vel = 0;
+          const tTrue = targetFor(cursor);
+          let d = tTrue - pos, k = 4.5;
+          if(S.engine === 'device'){
+            if(cursor < lastCurSeen) noLead = now + 900;          // you tapped or nudged backwards: follow exactly
+            lastCurSeen = cursor; k = 7;
+            let lead = 0;
+            if(armed && !counting && DEV.rec && now > noLead && now - lastLoud < 450){
+              lead = Math.min(2.2, pace() * (0.4 + Math.min(0.6, (now-lastAdv)/1000)));
+            }
+            if(now < noLead) d = tTrue - pos;
+            else if(lead > 0) d = Math.max(0, targetAt(cursor + lead) - pos);
+            else d = Math.max(0, tTrue - pos);
+          }
+          if(Math.abs(d) > 0.3) setPos(pos + d*Math.min(1, k*dt));
         }
       }
       if(armed && toks.length && cursor >= toks.length) endOfScript();
@@ -816,7 +844,7 @@ function beginRun(rec){
   if(audioCtx && audioCtx.state==='suspended') audioCtx.resume();
   countdown(rec ? S.count : S.countPractice, ()=>{
     if(rec) startRecording();
-    armed = true; lastResult = performance.now(); restarts = []; recent = []; misses = 0;
+    armed = true; lastResult = performance.now(); restarts = []; recent = []; misses = 0; paceBuf = []; lastAdv = performance.now();
     emptySessions = 0; evlog = []; lastHeardText = '';
     // Chrome speech beeps whenever it starts listening, so it is not used while recording unless you turn that on. The on-phone engine never beeps.
     if(effMode()==='words' && (S.engine==='device' || !rec || S.recWords)) startRecog();
