@@ -180,12 +180,18 @@ textarea{flex:1;resize:none;line-height:1.5;min-height:0}
     <div class="sec">Scrolling</div>
     <div class="set full"><label for="sMode">Scroll mode</label>
       <select id="sMode">
-        <option value="words">Follow my words (Chrome speech)</option>
+        <option value="words">Follow my words</option>
         <option value="sound">Follow my voice (sound only)</option>
         <option value="fixed">Steady speed</option>
       </select></div>
     <p class="hint" id="modeHint"></p>
-    <div class="set"><label for="sLang">Speech language</label>
+    <div class="set"><label for="sEngine">Word engine</label>
+      <select id="sEngine">
+        <option value="device">On this phone (works offline, no beeps)</option>
+        <option value="chrome">Chrome speech (needs internet, beeps)</option>
+      </select></div>
+    <div class="sw"><label for="sFit">On-phone engine: listen for the words in my script (more accurate)</label><input type="checkbox" id="sFit"></div>
+    <div class="set"><label for="sLang">Chrome speech language (not used by the on-phone engine, which is English)</label>
       <select id="sLang">
         <option value="en-CA">English (Canada)</option>
         <option value="en-US">English (US)</option>
@@ -194,7 +200,7 @@ textarea{flex:1;resize:none;line-height:1.5;min-height:0}
         <option value="pa-IN">Punjabi (India)</option>
         <option value="hi-IN">Hindi (India)</option>
       </select></div>
-    <div class="sw"><label for="sRecWords">Use Chrome speech while recording (it beeps, and the beeps can end up in your video)</label><input type="checkbox" id="sRecWords"></div>
+    <div class="sw"><label for="sRecWords">Chrome speech engine only: keep it on while recording (it beeps, and the beeps can end up in your video)</label><input type="checkbox" id="sRecWords"></div>
     <div class="sw"><label for="sHeard">Show what the app hears (for testing)</label><input type="checkbox" id="sHeard"></div>
     <div class="stp" data-step="speed"></div>
     <div class="stp" data-step="speedRec"></div>
@@ -224,7 +230,7 @@ textarea{flex:1;resize:none;line-height:1.5;min-height:0}
     <p class="hint">Pair your clicker or keyboard in Android Bluetooth settings first. Tap a button below, then press the key you want.</p>
     <div class="keys" id="keys"></div>
     <div class="row" style="margin-top:12px"><button id="keysReset">Reset keys</button></div>
-    <p class="hint" style="margin-top:18px">Prompter version 6. Tap any word on screen to jump there.</p>
+    <p class="hint" style="margin-top:18px">Prompter version 7. Tap any word on screen to jump there.</p>
   </div></div>
 </section>
 <div id="toast" role="status"></div>
@@ -249,9 +255,10 @@ const DEFAULT_KEYS = {
 const ACTIONS = [['toggle','Play / pause'],['faster','Faster'],['slower','Slower'],['back','Nudge back'],['forward','Nudge forward']];
 const DEF = { size:56, lh:1.4, margin:6, dim:55, mirror:false, line:true, linePos:40, hi:true,
   mode:'words', lang:'en-CA', heard:true, speed:30, speedRec:30, sens:55, hold:0.8,
-  count:3, countPractice:0, cam:true, mic:'', res:1080, fps:30, preset:'', autoPreset:false, recWords:false, nudge:2 };
+  count:3, countPractice:0, cam:true, mic:'', res:1080, fps:30, preset:'', autoPreset:false, recWords:false, nudge:2, engine:'device', fit:true };
 let S = Object.assign({}, DEF, store.get('tp.settings', {}));
 if(['words','sound','fixed'].indexOf(S.mode) < 0) S.mode = 'words';
+if(['device','chrome'].indexOf(S.engine) < 0) S.engine = 'device';
 
 /* Format presets: these settings are stored separately for Vertical and Horizontal */
 const PK = ['size','lh','margin','linePos','dim','hi','mirror','line','speed','speedRec','sens','hold','nudge'];
@@ -313,7 +320,9 @@ function eq(a,b){
   if(a.length>=5 && b.length>=5 && near(a,b)) return true;
   return false;
 }
-const effMode = () => (S.mode==='words' && !SR) ? 'sound' : S.mode;
+const deviceOk = () => !!(window.WebAssembly && window.Worker && navigator.mediaDevices);
+const wordsOk = () => S.engine==='device' ? deviceOk() : !!SR;
+const effMode = () => (S.mode==='words' && !wordsOk()) ? 'sound' : S.mode;
 
 /* ---------- library ---------- */
 function renderList(){
@@ -432,6 +441,7 @@ function openStage(s){
   show('stage'); buildText(s.body); autoSwitch(); glideTo = null; pos = 0; armed = false; vel = 0; speaking = false; counting = false;
   applyLook(); setPos(0); setPlayUI(); showControls(true);
   startMedia(); lockScreen(); startSilentAudio(); loop();
+  if(effMode()==='words' && S.engine==='device') ensureModel();
 }
 function closeStage(){
   if(recording) stopRecording();
@@ -518,6 +528,134 @@ function readLevel(now){
   m.lastElementChild.style.left = (((thresholdDb()+80)/60)*100)+'%';
 }
 
+/* ---------- on-device speech (Vosk, runs in WebAssembly): works offline, no beeps ---------- */
+const DEV = { model:null, loading:null, ready:false, failed:false, msg:'', rec:null, ctx:null, node:null, src:null, sink:null, gen:0, consumed:0 };
+const DEV_PARTS = ['model/en-in.part00','model/en-in.part01','model/en-in.part02','model/en-in.part03'];
+const DEV_SIZE = 37561269;
+const DEV_REMOTE = 'https://ccoreilly.github.io/vosk-browser/models/vosk-model-small-en-in-0.4.tar.gz';
+const DEV_LIBS = ['vendor/vosk.js','https://cdn.jsdelivr.net/npm/vosk-browser@0.0.8/dist/vosk.js'];
+const NUM_REV = ['zero','one','two','three','four','five','six','seven','eight','nine','ten','eleven','twelve','thirteen','fourteen','fifteen','sixteen','seventeen','eighteen','nineteen','twenty'];
+const devReady = () => S.engine !== 'device' || DEV.ready;
+function loadScript(src){
+  return new Promise((res, rej)=>{ const e = document.createElement('script'); e.src = src; e.onload = res; e.onerror = ()=>{ e.remove(); rej(new Error('script')); }; document.head.appendChild(e); });
+}
+async function fetchBytes(url, onBytes){
+  const r = await fetch(url);
+  if(!r.ok) throw new Error('http '+r.status);
+  if(!r.body || !r.body.getReader){ const b = new Uint8Array(await r.arrayBuffer()); onBytes(b.length); return [b]; }
+  const rd = r.body.getReader(), out = [];
+  for(;;){ const {done, value} = await rd.read(); if(done) break; out.push(value); onBytes(value.length); }
+  return out;
+}
+async function getModelBytes(){
+  let got = 0;
+  const upd = n=>{ got += n; DEV.msg = 'Downloading speech '+Math.min(99,Math.round(got*100/DEV_SIZE))+'%'; };
+  try{
+    const all = [];
+    for(const u of DEV_PARTS){ const b = await fetchBytes(u, upd); for(const x of b) all.push(x); }
+    return all;
+  }catch(e){
+    got = 0;
+    return await fetchBytes(DEV_REMOTE, upd);
+  }
+}
+function ensureModel(){
+  if(DEV.ready) return Promise.resolve(true);
+  if(DEV.loading) return DEV.loading;
+  DEV.failed = false;
+  DEV.loading = (async()=>{
+    try{
+      DEV.msg = 'Loading speech';
+      if(!window.Vosk){
+        for(const s of DEV_LIBS){ try{ await loadScript(s); if(window.Vosk) break; }catch(e){} }
+        if(!window.Vosk) throw new Error('lib');
+      }
+      const bytes = await getModelBytes();
+      DEV.msg = 'Starting speech';
+      const url = URL.createObjectURL(new Blob(bytes, {type:'application/gzip'}));
+      let m;
+      try{ m = await Vosk.createModel(url, -2); } finally { URL.revokeObjectURL(url); }
+      DEV.model = m; DEV.ready = true; DEV.msg = '';
+      return true;
+    }catch(e){
+      DEV.failed = true; DEV.msg = '';
+      toast('Could not load the on-phone speech model. Connect to the internet once and try again. Using sound only for now.', 6000);
+      return false;
+    }finally{ DEV.loading = null; }
+  })();
+  return DEV.loading;
+}
+function scriptVocab(){
+  const set = new Set(['[unk]']);
+  for(const t of toks){
+    let w = t.el.textContent.toLowerCase().replace(/[‘’]/g, "'").replace(/[^a-z0-9']+/g, '').replace(/^'+|'+$/g, '');
+    if(/^\d+$/.test(w)){ const n = +w; w = n <= 20 ? NUM_REV[n] : ''; }
+    if(w && /^[a-z']+$/.test(w)) set.add(w);
+  }
+  return Array.from(set);
+}
+function devText(text, final){
+  const ws = (text||'').trim().split(/\s+/).filter(Boolean);
+  if(ws.length){
+    lastResult = performance.now();
+    for(let k = DEV.consumed; k < ws.length; k++){ if(ws[k] !== '[unk]') hear(ws[k]); }
+    if(ws.length > DEV.consumed) DEV.consumed = ws.length;
+    lastHeardText = ws.slice(-8).join(' ');
+  }
+  if(final) DEV.consumed = 0;
+  refreshHeard();
+}
+const FEED_CODE = "class F extends AudioWorkletProcessor{constructor(){super();this.b=new Float32Array(2048);this.n=0;}process(i){const c=i[0]&&i[0][0];if(c){for(let k=0;k<c.length;k++){this.b[this.n++]=c[k];if(this.n===2048){this.port.postMessage(this.b.slice(0));this.n=0;}}}return true;}}registerProcessor('feed',F);";
+async function startDevice(){
+  recogWanted = true; const my = ++DEV.gen;
+  logEv('starting');
+  const ok = await ensureModel();
+  if(my !== DEV.gen) return;
+  if(!ok){ recogWanted = false; return; }
+  if(!recogWanted || !armed) return;
+  if(!stream || !stream.getAudioTracks().length){ recogWanted = false; toast('No microphone for word-following. Using sound only.', 4000); return; }
+  try{
+    let ctx; try{ ctx = new AudioContext({sampleRate:16000}); }catch(e){ ctx = new (window.AudioContext||window.webkitAudioContext)(); }
+    DEV.ctx = ctx;
+    const rate = ctx.sampleRate;
+    const rec = S.fit ? new DEV.model.KaldiRecognizer(rate, JSON.stringify(scriptVocab())) : new DEV.model.KaldiRecognizer(rate);
+    DEV.rec = rec; DEV.consumed = 0;
+    rec.on('partialresult', m=>{ if(DEV.rec === rec) devText(m.result.partial, false); });
+    rec.on('result', m=>{ if(DEV.rec === rec) devText(m.result.text, true); });
+    rec.on('error', m=>logEv('error: '+(m.error||'')));
+    const src = ctx.createMediaStreamSource(stream); DEV.src = src;
+    const feed = e=>{ try{ rec.acceptWaveformFloat(e, rate); }catch(err){} };
+    const sink = ctx.createGain(); sink.gain.value = 0; sink.connect(ctx.destination); DEV.sink = sink;
+    if(ctx.audioWorklet && window.AudioWorkletNode){
+      const u = URL.createObjectURL(new Blob([FEED_CODE], {type:'application/javascript'}));
+      try{ await ctx.audioWorklet.addModule(u); } finally { URL.revokeObjectURL(u); }
+      if(my !== DEV.gen){ try{ ctx.close(); }catch(e){} return; }
+      const node = new AudioWorkletNode(ctx, 'feed'); DEV.node = node;
+      node.port.onmessage = ev=>feed(ev.data);
+      src.connect(node); node.connect(sink);
+    }else{
+      const node = ctx.createScriptProcessor(4096, 1, 1); DEV.node = node;
+      node.onaudioprocess = ev=>feed(new Float32Array(ev.inputBuffer.getChannelData(0)));
+      src.connect(node); node.connect(sink);
+    }
+    if(ctx.state === 'suspended') await ctx.resume();
+    lastResult = performance.now(); logEv('listening');
+  }catch(e){
+    stopDevice(); recogWanted = false; logEv('error');
+    toast('The on-phone speech engine could not start. Using sound only.', 4500);
+  }
+}
+function stopDevice(){
+  DEV.gen++;
+  const n = DEV.node, s = DEV.src, g = DEV.sink, c = DEV.ctx, r = DEV.rec;
+  DEV.node = DEV.src = DEV.sink = DEV.ctx = DEV.rec = null;
+  try{ if(n){ if(n.port) n.port.onmessage = null; n.onaudioprocess = null; n.disconnect(); } }catch(e){}
+  try{ s && s.disconnect(); }catch(e){}
+  try{ g && g.disconnect(); }catch(e){}
+  try{ c && c.close(); }catch(e){}
+  try{ r && r.remove(); }catch(e){}
+}
+
 /* ---------- speech following (Chrome SpeechRecognition) ---------- */
 let recog = null, recogWanted = false, restarts = [], lastIdx = -1, consumedTail = 0, prevTail = [];
 let emptySessions = 0, soundSeen = false, evlog = [], lastHeardText = '';
@@ -549,6 +687,7 @@ function resync(){
   }
 }
 function startRecog(){
+  if(S.engine === 'device'){ if(deviceOk() && !DEV.rec) startDevice(); return; }
   if(!SR || recog) return;
   recogWanted = true;
   const r = new SR(); recog = r;
@@ -597,7 +736,7 @@ function startRecog(){
   try{ r.start(); }catch(e){ recog = null; recogWanted = false; }
 }
 function stopRecog(){
-  recogWanted = false; const r = recog; recog = null;
+  recogWanted = false; stopDevice(); const r = recog; recog = null;
   if(r){ r.onend = null; r.onresult = null; r.onerror = null; try{ r.abort(); }catch(e){} }
 }
 
@@ -613,7 +752,7 @@ function loop(){
       if(!(drag && drag.moved)){
         const live = armed && !counting;
         if(live && speaking) soundSeen = true;
-        if(live && analyser && speaking && (!recogWanted || now-lastResult > 5000)){
+        if(live && analyser && speaking && (!recogWanted || !devReady() || now-lastResult > 5000)){
           inFallback = true;
           vel += (pxPerSec()-vel) * Math.min(1, 10*dt); setPos(pos + vel*dt);
           if(now-lastSync > 150){ lastSync = now; const c = cursorFromPos(); if(c > cursor){ cursor = c; paint(); } }
@@ -651,13 +790,14 @@ function setStatus(){
   if(armed){
     const mode = effMode();
     if(mode === 'words'){
-      if(inFallback){ txt = 'Sound only'; cls = 'live'; }
+      if(S.engine==='device' && DEV.loading){ txt = DEV.msg || 'Loading speech'; if(inFallback) cls = 'live'; }
+      else if(inFallback){ txt = 'Sound only'; cls = 'live'; }
       else if(performance.now()-lastResult < 2500){ txt = 'Following'; cls = 'live'; }
       else txt = 'Listening';
     } else if(mode === 'sound'){ txt = analyser ? (speaking ? 'Speaking' : 'Waiting') : 'Scrolling'; cls = speaking ? 'live' : ''; }
     else { txt = 'Scrolling'; cls = 'live'; }
   }
-  const showHeard = S.heard && armed && effMode()==='words' && !(recording && !S.recWords);
+  const showHeard = S.heard && armed && effMode()==='words' && (S.engine==='device' || !(recording && !S.recWords));
   const key = txt+'|'+cls+'|'+showHeard;
   if(key === statusKey) return; statusKey = key;
   const s = $('status'); s.textContent = txt; s.className = cls;
@@ -678,8 +818,8 @@ function beginRun(rec){
     if(rec) startRecording();
     armed = true; lastResult = performance.now(); restarts = []; recent = []; misses = 0;
     emptySessions = 0; evlog = []; lastHeardText = '';
-    // Chrome speech beeps whenever it starts listening, so it is not used while recording unless you turn that on
-    if(effMode()==='words' && (!rec || S.recWords)) startRecog();
+    // Chrome speech beeps whenever it starts listening, so it is not used while recording unless you turn that on. The on-phone engine never beeps.
+    if(effMode()==='words' && (S.engine==='device' || !rec || S.recWords)) startRecog();
     setPlayUI(); showControls(false);
   });
 }
@@ -875,12 +1015,13 @@ function buildSteppers(){
   });
 }
 buildSteppers();
-const selMap = { sMode:['mode',false], sLang:['lang',false], sRes:['res',true], sFps:['fps',true], sCount:['count',true], sCountPractice:['countPractice',true] };
-const boxMap = { sMirror:'mirror', sLine:'line', sHi:'hi', sHeard:'heard', sCam:'cam', sAuto:'autoPreset', sRecWords:'recWords' };
+const selMap = { sMode:['mode',false], sEngine:['engine',false], sLang:['lang',false], sRes:['res',true], sFps:['fps',true], sCount:['count',true], sCountPractice:['countPractice',true] };
+const boxMap = { sMirror:'mirror', sLine:'line', sHi:'hi', sHeard:'heard', sCam:'cam', sAuto:'autoPreset', sRecWords:'recWords', sFit:'fit' };
 function modeHint(){
   const m = S.mode;
-  $('modeHint').textContent = !SR && m==='words' ? 'This browser has no speech recognition, so it will use sound only.' :
-    m==='words' ? 'Moves to where you are in the script as you speak. Needs internet. Chrome beeps each time it starts listening, so while you record it uses sound-based scrolling instead (unless you tick the option below). If Chrome cannot hear words, it also falls back to sound-based scrolling.' :
+  $('modeHint').textContent = m==='words' && !wordsOk() ? 'Word-following is not available here, so it will use sound only.' :
+    m==='words' && S.engine==='device' ? 'Moves to where you are in the script as you speak. The first time, it downloads a small speech model (about 37 MB) and keeps it, so after that it works offline. If it cannot hear words, it falls back to sound-based scrolling.' :
+    m==='words' ? 'Moves to where you are in the script as you speak. Needs internet. Chrome beeps each time it starts listening, so while you record it uses sound-based scrolling instead (unless you tick the option below).' :
     m==='sound' ? 'Scrolls while it hears you and pauses when you go quiet. Works offline.' : 'Scrolls at the backup speed the whole time.';
 }
 function syncSettings(){
@@ -894,9 +1035,9 @@ for(const id in selMap){
     const [k,num] = selMap[id];
     if((id==='sRes' || id==='sFps') && recording){ toast('Stop recording before changing video quality'); syncSettings(); return; }
     S[k] = num ? parseInt($(id).value,10) : $(id).value; saveSettings();
-    const speechOk = armed && effMode()==='words' && !(recording && !S.recWords);
-    if(id==='sMode'){ modeHint(); stopRecog(); if(speechOk){ lastResult = performance.now(); restarts = []; emptySessions = 0; startRecog(); } }
-    if(id==='sLang' && speechOk){ stopRecog(); startRecog(); }
+    const speechOk = armed && effMode()==='words' && (S.engine==='device' || !(recording && !S.recWords));
+    if(id==='sMode' || id==='sEngine'){ modeHint(); stopRecog(); if(speechOk){ lastResult = performance.now(); restarts = []; emptySessions = 0; startRecog(); } if(id==='sEngine' && S.engine==='device' && effMode()==='words') ensureModel(); }
+    if(id==='sLang' && speechOk && S.engine==='chrome'){ stopRecog(); startRecog(); }
     if(id==='sRes' || id==='sFps') startMedia();
   });
 }
@@ -906,6 +1047,7 @@ for(const id in boxMap){
     S[boxMap[id]] = $(id).checked; saveSettings(); applyLook();
     if(id==='sCam') startMedia();
     if(id==='sHeard') statusKey = '';
+    if(id==='sFit' && armed && S.engine==='device' && effMode()==='words'){ stopRecog(); startRecog(); }
     if(id==='sAuto') autoSwitch();
   });
 }
