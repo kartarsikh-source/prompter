@@ -230,7 +230,7 @@ textarea{flex:1;resize:none;line-height:1.5;min-height:0}
     <p class="hint">Pair your clicker or keyboard in Android Bluetooth settings first. Tap a button below, then press the key you want.</p>
     <div class="keys" id="keys"></div>
     <div class="row" style="margin-top:12px"><button id="keysReset">Reset keys</button></div>
-    <p class="hint" style="margin-top:18px">Prompter version 8. Tap any word on screen to jump there.</p>
+    <p class="hint" style="margin-top:18px">Prompter version 9. Tap any word on screen to jump there.</p>
   </div></div>
 </section>
 <div id="toast" role="status"></div>
@@ -432,7 +432,7 @@ function paint(){
   hl = cursor;
 }
 function setCursor(i, snap){
-  cursor = Math.min(Math.max(0,i), toks.length); paint(); recent = []; misses = 0; paceBuf = [];
+  cursor = Math.min(Math.max(0,i), toks.length); paint(); recent = []; misses = 0; paceBuf = []; vi = cursor;
   if(snap){ glideTo = null; setPos(targetFor(cursor)); vel = 0; }
 }
 
@@ -666,7 +666,7 @@ function refreshHeard(){
 }
 /* Speech engines report a word a little after you say it. To hide that delay the text is aimed a few words ahead of
    the last heard word, based on how fast you have been speaking, and it never creeps backwards by itself. */
-let paceBuf = [], lastAdv = 0, lastCurSeen = 0, noLead = 0;
+let paceBuf = [], lastAdv = 0, lastCurSeen = 0, noLead = 0, vi = 0, paceS = 2.4;
 function paceNote(){ const t = performance.now(); lastAdv = t; paceBuf.push({t:t, c:cursor}); while(paceBuf.length && t - paceBuf[0].t > 5000) paceBuf.shift(); }
 function pace(){
   if(paceBuf.length < 3) return 2.4;
@@ -674,10 +674,20 @@ function pace(){
   if(span < 1.2) return 2.4;
   return Math.min(4.5, Math.max(1.2, (b.c-a.c)/span));
 }
+// Vertical position for word i that also moves smoothly along its line, so the text flows instead of stepping line by line.
+function yOf(i){
+  if(i >= toks.length) return maxPos();
+  if(i < 0) i = 0;
+  const tk = toks[i], el = tk.el, t = $('text');
+  if(tk.anchor !== el) return Math.min(maxPos(), Math.max(0, tk.anchor.offsetTop - lineY()));
+  const pl = parseFloat(t.style.paddingLeft) || 0, w = t.clientWidth - 2*pl, H = S.size*S.lh;
+  const f = w > 0 ? Math.min(1, Math.max(0, (el.offsetLeft - pl)/w)) : 0;
+  return Math.min(maxPos(), Math.max(0, el.offsetTop + (f-0.5)*H - lineY()));
+}
 function targetAt(f){
-  const i = Math.floor(f), fr = f - i, a = targetFor(i);
+  const i = Math.floor(f), fr = f - i, a = yOf(i);
   if(fr < 0.01 || i+1 >= toks.length) return a;
-  return a + (targetFor(i+1)-a)*fr;
+  return a + (yOf(i+1)-a)*fr;
 }
 function hear(raw){
   const w = nw(raw); if(!w || cursor >= toks.length) return;
@@ -776,15 +786,21 @@ function loop(){
           const tTrue = targetFor(cursor);
           let d = tTrue - pos, k = 4.5;
           if(S.engine === 'device'){
-            if(cursor < lastCurSeen) noLead = now + 900;          // you tapped or nudged backwards: follow exactly
-            lastCurSeen = cursor; k = 7;
-            let lead = 0;
-            if(armed && !counting && DEV.rec && now > noLead && now - lastLoud < 450){
-              lead = Math.min(2.2, pace() * (0.4 + Math.min(0.6, (now-lastAdv)/1000)));
+            // Smooth flow: the text moves continuously at your speaking pace. Heard words only steer it,
+            // so late or bunched-up results no longer make it jump.
+            if(cursor < lastCurSeen){ noLead = now + 900; vi = cursor; }
+            lastCurSeen = cursor; k = 14;
+            const live = armed && !counting && DEV.rec && now > noLead;
+            const sp = live && (now - lastLoud < 450);
+            paceS += (pace() - paceS) * Math.min(1, dt*0.8);
+            if(!live){ vi = (now < noLead) ? cursor : Math.max(vi, cursor); }
+            else{
+              if(sp) vi += paceS*dt;
+              const err = (cursor + paceS*0.5) - vi;
+              if(sp || err > 0) vi += err * Math.min(1, (err > 0 ? 3 : 0.8)*dt);
+              vi = Math.min(cursor + 4, Math.max(cursor, vi));
             }
-            if(now < noLead) d = tTrue - pos;
-            else if(lead > 0) d = Math.max(0, targetAt(cursor + lead) - pos);
-            else d = Math.max(0, tTrue - pos);
+            d = (now < noLead) ? tTrue - pos : Math.max(0, targetAt(vi) - pos);
           }
           if(Math.abs(d) > 0.3) setPos(pos + d*Math.min(1, k*dt));
         }
@@ -844,7 +860,7 @@ function beginRun(rec){
   if(audioCtx && audioCtx.state==='suspended') audioCtx.resume();
   countdown(rec ? S.count : S.countPractice, ()=>{
     if(rec) startRecording();
-    armed = true; lastResult = performance.now(); restarts = []; recent = []; misses = 0; paceBuf = []; lastAdv = performance.now();
+    armed = true; lastResult = performance.now(); restarts = []; recent = []; misses = 0; paceBuf = []; lastAdv = performance.now(); vi = cursor; paceS = 2.4;
     emptySessions = 0; evlog = []; lastHeardText = '';
     // Chrome speech beeps whenever it starts listening, so it is not used while recording unless you turn that on. The on-phone engine never beeps.
     if(effMode()==='words' && (S.engine==='device' || !rec || S.recWords)) startRecog();
